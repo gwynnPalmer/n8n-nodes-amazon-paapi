@@ -311,6 +311,35 @@ export class AmazonPaapi implements INodeType {
 						description:
 							'Preferred language(s) for item info (ISO code, e.g. en_US). If multiple, separate with commas.',
 					},
+					{
+						displayName: 'Request Delay',
+						name: 'requestDelay',
+						type: 'number',
+						default: 0,
+						description:
+							'Delay in milliseconds between API requests to avoid rate limiting (0 = no delay)',
+					},
+					{
+						displayName: 'Jitter Delay',
+						name: 'jitterDelay',
+						type: 'boolean',
+						default: false,
+						description:
+							'Whether to add random jitter to delay to prevent predictable request patterns',
+					},
+					{
+						displayName: 'Maximum Jitter',
+						name: 'maxJitter',
+						type: 'number',
+						default: 500,
+						description:
+							'Maximum random delay to add in milliseconds (only used if Jitter Delay is enabled)',
+						displayOptions: {
+							show: {
+								jitterDelay: [true],
+							},
+						},
+					},
 				],
 			},
 		],
@@ -319,6 +348,18 @@ export class AmazonPaapi implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+
+		// Helper function to create a delay without using setTimeout
+		const sleep = async (ms: number): Promise<void> => {
+			if (ms <= 0) return Promise.resolve();
+
+			return new Promise((resolve) => {
+				const startTime = Date.now();
+				// eslint-disable-next-line no-empty
+				while (Date.now() - startTime < ms) {}
+				resolve();
+			});
+		};
 
 		// Retrieve credentials
 		const credentials = await this.getCredentials('amazonPaapi');
@@ -346,6 +387,27 @@ export class AmazonPaapi implements INodeType {
 		// Loop through each item
 		for (let i = 0; i < items.length; i++) {
 			try {
+				// Get delay parameters (if any)
+				const additionalOptions = this.getNodeParameter('additionalOptions', i, {}) as {
+					[key: string]: any;
+				};
+
+				// Apply delay if configured and not the first request
+				if (i > 0 && additionalOptions.requestDelay) {
+					let delayTime = additionalOptions.requestDelay as number;
+
+					// Add random jitter if enabled
+					if (additionalOptions.jitterDelay === true) {
+						const maxJitter = (additionalOptions.maxJitter as number) || 500;
+						delayTime += Math.floor(Math.random() * maxJitter);
+					}
+
+					// Only delay if time is greater than zero
+					if (delayTime > 0) {
+						await sleep(delayTime);
+					}
+				}
+
 				const operation = this.getNodeParameter('operation', i) as string;
 
 				if (operation === 'searchItems') {
@@ -467,10 +529,7 @@ export class AmazonPaapi implements INodeType {
 						requestParameters.Resources = resources;
 					}
 
-					// Additional Options
-					const additionalOptions = this.getNodeParameter('additionalOptions', i, {}) as {
-						[key: string]: any;
-					};
+					// Additional Options (except delay which is handled separately)
 					if (Object.keys(additionalOptions).length > 0) {
 						// OfferCount
 						if (additionalOptions.offerCount) {
